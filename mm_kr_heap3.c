@@ -205,14 +205,14 @@ void mm_free(void *ap) {
         bp->s.size += p->s.ptr->s.size;
         bp->s.ptr = p->s.ptr->s.ptr;
 
-        bp->s.prevptr = p->s.ptr->s.prevptr;
+        bp->s.ptr->s.prevptr = bp;
 
     } else {
         // link in before upper block
         bp->s.ptr = p->s.ptr;
 
-        bp->s.prevptr = p->s.ptr->s.prevptr;
-        
+        bp->s.ptr->s.prevptr = bp;
+
     }
 
     if (p + p->s.size == bp) {
@@ -220,9 +220,14 @@ void mm_free(void *ap) {
         p->s.size += bp->s.size;
         p->s.ptr = bp->s.ptr;
 
+        bp->s.ptr->s.prevptr = p;
+
     } else {
         // link in after lower block
         p->s.ptr = bp;
+
+        p->s.ptr->s.prevptr = p;
+
     }
 
     /* reset the start of the free list */
