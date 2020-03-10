@@ -14,46 +14,46 @@
 #include "mm_heap.h"
 
 
-/** Allocation unit for forward header of memory blocks */
-typedef union FwdHeader {
+/** Allocation unit for header of memory blocks */
+typedef union Header {
     struct {
-        union FwdHeader *nextPtr;  /** next block if on free list */
+        union Header *ptr;  /** next block if on free list */
         size_t size;        /** size of this block including header */
         /** measured in multiple of header size */
     } s;
     max_align_t _align;     /** force alignment to max align boundary */
-} FwdHeader;
-//
-///** Allocation unit for backward header of memory blocks */
-//typedef union BwdHeader {
-//    struct {
-//        union BwdHeader *prevPtr;  /** previous block if on free list*/
-//        size_t size;        /** size of this block including header */
-//        /** measured in multiple of header size */
-//    } s;
-//    max_align_t _align;     /** force alignment to max align boundary */
-//} BwdHeader;
+} Header, Footer;
+
+// get Footer position
+inline static Footer *Footer(Header *h) {
+    return h+h->s.size-1;
+}
+
+// equalizing the size in Footer
+inline static void equalFooter(Header *h) {
+    Footer(h)->s.size = h->s.size;
+}
 
 // forward declarations
-static FwdHeader *morecore(size_t);
+static Header *morecore(size_t);
 void visualize(const char*);
 
 /** Empty list to get started */
-static FwdHeader base1;
-static BwdHeader base2;
+static Header baseH;
+//static Header base;
+static Footer baseF;
 
 /** Start of free memory list */
-static FwdHeader *freep = NULL;
+static Header *freep = NULL;
 
 /**
  * Initialize memory allocator
  */
 void mm_init() {
     mem_init();
-    base1.s.nextPtr = freep = &base1;
-    base1.s.size = 0;
-    base2.s.prevPtr = &base2;
-    base2.s.size = base1.s.size;
+
+    baseH.s.ptr = freep = baseF.s.ptr = &baseH;
+    baseH.s.size = baseF.s.size = 0;
 }
 
 /**
@@ -61,10 +61,11 @@ void mm_init() {
  */
 void mm_reset(void) {
     mem_reset_brk();
-    base1.s.nextPtr = freep = &base1;
-    base1.s.size = 0;
-    base2.s.prevPtr = &base2;
-    base2.s.size = base1.s.size;
+
+//    base.s.ptr = freep = &base;
+//    base.s.size = 0;
+    baseH.s.ptr = freep = baseF.s.ptr = &baseH;
+    baseH.s.size = baseF.s.size = 0;
 }
 
 /**
@@ -72,10 +73,11 @@ void mm_reset(void) {
  */
 void mm_deinit(void) {
     mem_deinit();
-    base1.s.nextPtr = freep = &base1;
-    base1.s.size = 0;
-    base2.s.prevPtr = &base2;
-    base2.s.size = base1.s.size;
+
+//    base.s.ptr = freep = &base;
+//    base.s.size = 0;
+    baseH.s.ptr = freep = baseF.s.ptr = &baseH;
+    baseH.s.size = baseF.s.size = 0;
 }
 
 /**
@@ -86,8 +88,8 @@ void mm_deinit(void) {
  */
 inline static size_t mm_units(size_t nbytes) {
     /* smallest count of Header-sized memory chunks */
-    /* (+2 additional chunk for the two Headers) needed to hold nbytes */
-    return (nbytes + sizeof(FwdHeader) - 1) / sizeof(FwdHeader) + 2;
+    /*  (+2 additional chunk for the Header and Footer) needed to hold nbytes */
+    return (nbytes + sizeof(Header) - 1) / sizeof(Header) + 2;
 }
 
 /**
@@ -97,7 +99,7 @@ inline static size_t mm_units(size_t nbytes) {
  * @return number of bytes for nunits
  */
 inline static size_t mm_bytes(size_t nunits) {
-    return nunits * sizeof(FwdHeader);
+    return nunits * sizeof(Header);
 }
 
 /**
@@ -106,7 +108,7 @@ inline static size_t mm_bytes(size_t nunits) {
  * @param bp the block
  * @return pointer to allocated payload
  */
-inline static void *mm_payload(FwdHeader *bp) {
+inline static void *mm_payload(Header *bp) {
     return bp + 1;
 }
 
@@ -115,8 +117,8 @@ inline static void *mm_payload(FwdHeader *bp) {
  *
  * @param ap the allocated payload pointer
  */
-inline static FwdHeader *mm_block(void *ap) {
-    return (FwdHeader*)ap - 1;
+inline static Header *mm_block(void *ap) {
+    return (Header*)ap - 1;
 }
 
 
@@ -133,27 +135,36 @@ void *mm_malloc(size_t nbytes) {
         mm_init();
     }
 
-    FwdHeader *prevp = freep;
+    Header *prevp = freep;
 
     // smallest count of Header-sized memory chunks
-    //  (+2 additional chunk for the two Headers) needed to hold nbytes
+    //  (+2 additional chunk for the Header and Footer) needed to hold nbytes
     size_t nunits = mm_units(nbytes);
 
     // traverse the circular list to find a block
-    for (FwdHeader *p = prevp->s.nextPtr; true ; prevp = p, p = p->s.nextPtr) {
+    for (Header *p = prevp->s.ptr; true ; prevp = p, p = p->s.ptr) {
         if (p->s.size >= nunits) {          /* found block large enough */
             if (p->s.size == nunits) {
-
                 // free block exact size
-                prevp->s.nextPtr = p->s.nextPtr;
+                prevp->s.ptr = p->s.ptr;
+                Footer(p->s.ptr)->s.ptr = Footer(p)->s.ptr;
             } else {
                 // split and allocate tail end
-                p->s.size -= nunits; // adjust the size to split the block
-                /* find the address to return */
+                Footer *f = Footer(p)->s.ptr; /* store the original Footer pointer */
+                p->s.size -= nunits; // adjust the size (of the current free block after malloc operation) to (before)
+                                        // split the block (in the next step)
+                Footer(p)->s.ptr = f; /* make the Footer of the remaining free block point to wherever the original
+                                         pointer pointed to */
+                equalFooter(p); /* update the size in Footer of the remaining free block */
+                /* find the address to return (by moving the *p pointer) */
                 p += p->s.size;		 // address upper block to return
                 p->s.size = nunits;	 // set size of block
+                equalFooter(p); /* update the size in Footer of the allocated block */
             }
-            p->s.nextPtr = NULL;  // no longer on free list
+            p->s.ptr = NULL;  // no longer on free list
+
+            Footer(p)->s.ptr = NULL; /* Footer pointer set to NULL */
+
             freep = prevp;  /* move the head */
             return mm_payload(p);
         }
@@ -185,40 +196,40 @@ void mm_free(void *ap) {
         return;
     }
 
-    FwdHeader *bp = mm_block(ap);   /* point to block header */
+    Header *bp = mm_block(ap);   /* point to block header */
 
     // validate size field of header block
     assert(bp->s.size > 0 && mm_bytes(bp->s.size) <= mem_heapsize());
 
     // find where to insert the free space
-    // (bp > p && bp < p->s.nextPtr) => between two nodes
-    // (p > p->s.nextPtr)            => this is the end of the list
-    // (p == p->p.nextPtr)           => list is one element only
-    FwdHeader *p = freep;
-    for ( ; !(bp > p && bp < p->s.nextPtr); p = p->s.nextPtr) {
-        if (p >= p->s.nextPtr && (bp > p || bp < p->s.nextPtr)) {
+    // (bp > p && bp < p->s.ptr) => between two nodes
+    // (p > p->s.ptr)            => this is the end of the list
+    // (p == p->p.ptr)           => list is one element only
+    Header *p = freep;
+    for ( ; !(bp > p && bp < p->s.ptr); p = p->s.ptr) {
+        if (p >= p->s.ptr && (bp > p || bp < p->s.ptr)) {
             // freed block at start or end of arena
             break;
         }
     }
 
-    if (bp + bp->s.size == p->s.nextPtr) {
+    if (bp + bp->s.size == p->s.ptr) {
         // coalesce if adjacent to upper neighbor
-        bp->s.size += p->s.nextPtr->s.size;
-        bp->s.nextPtr = p->s.nextPtr->s.nextPtr;
+        bp->s.size += p->s.ptr->s.size;
+        bp->s.ptr = p->s.ptr->s.ptr;
     } else {
         // link in before upper block
-        bp->s.nextPtr = p->s.nextPtr;
+        bp->s.ptr = p->s.ptr;
     }
 
     if (p + p->s.size == bp) {
         // coalesce if adjacent to lower block
         p->s.size += bp->s.size;
-        p->s.nextPtr = bp->s.nextPtr;
+        p->s.ptr = bp->s.ptr;
 
     } else {
         // link in after lower block
-        p->s.nextPtr = bp;
+        p->s.ptr = bp;
     }
 
     /* reset the start of the free list */
@@ -231,12 +242,12 @@ void mm_free(void *ap) {
  *
  * If there is not enough room to enlarge the memory allocation
  * pointed to by ap, realloc() creates a new allocation, copies
- * as much of the old data pointed to by nextPtr as will fit to the
+ * as much of the old data pointed to by ptr as will fit to the
  * new allocation, frees the old allocation, and returns a pointer
  * to the allocated memory.
  *
  * If ap is NULL, realloc() is identical to a call to malloc()
- * for size bytes.  If size is zero and nextPtr is not NULL, a minimum
+ * for size bytes.  If size is zero and ptr is not NULL, a minimum
  * sized object is allocated and the original object is freed.
  *
  * @param ap pointer to allocated memory
@@ -250,7 +261,7 @@ void* mm_realloc(void *ap, size_t newsize) {
         return mm_malloc(newsize);
     }
 
-    FwdHeader* bp = mm_block(ap);    // point to block header
+    Header* bp = mm_block(ap);    // point to block header
     if (newsize > 0) {
         // return this ap if allocated block large enough
         if (bp->s.size >= mm_units(newsize)) {
@@ -277,9 +288,9 @@ void* mm_realloc(void *ap, size_t newsize) {
  * @param nu the number of Header units to be added
  * @return pointer to start additional memory added
  */
-static FwdHeader *morecore(size_t nu) {
+static Header *morecore(size_t nu) {
     // nalloc based on page size
-    size_t nalloc = mem_pagesize()/sizeof(FwdHeader);
+    size_t nalloc = mem_pagesize()/sizeof(Header);
 
     /* get at least NALLOC Header-chunks from the OS */
     if (nu < nalloc) {
@@ -292,8 +303,12 @@ static FwdHeader *morecore(size_t nu) {
         return NULL;
     }
 
-    FwdHeader* bp = (FwdHeader*)p;
+    Header* bp = (Header*)p;
     bp->s.size = nu;
+
+//    Footer(bp)->s.size = bp->s.size;
+
+    equalFooter(bp); /* set Footer size equal to Header size */
 
     // add new space to the circular list
     mm_free(bp+1);
@@ -314,7 +329,7 @@ void visualize(const char* msg) {
         return;
     }
 
-    if (freep == freep->s.nextPtr) {          /* self-pointing list = empty */
+    if (freep == freep->s.ptr) {          /* self-pointing list = empty */
         fprintf(stderr, "    List is empty\n\n");
         return;
     }
@@ -323,15 +338,15 @@ void visualize(const char* msg) {
     tmp = freep;                           // find the start of the list
     char* str = "    ";
     do {           // traverse the list
-        fprintf(stderr, "%snextPtr: %10p size: %-3lu blks - %-5lu bytes\n",
+        fprintf(stderr, "%sptr: %10p size: %-3lu blks - %-5lu bytes\n",
         	str, (void *)tmp, tmp->s.size, mm_bytes(tmp->s.size));
         str = " -> ";
-        tmp = tmp->s.nextPtr;
-    }  while (tmp->s.nextPtr > freep);
+        tmp = tmp->s.ptr;
+    }  while (tmp->s.ptr > freep);
 */
     char* str = "    ";
-    for (FwdHeader *p = base.s.nextPtr; p != &base; p = p->s.nextPtr) {
-        fprintf(stderr, "%snextPtr: %10p size: %3lu blks - %5lu bytes\n",
+    for (Header *p = base.s.ptr; p != &base; p = p->s.ptr) {
+        fprintf(stderr, "%sptr: %10p size: %3lu blks - %5lu bytes\n",
                 str, (void *)p, p->s.size, mm_bytes(p->s.size));
         str = " -> ";
     }
@@ -352,12 +367,12 @@ size_t mm_getfree(void) {
     }
 
     // point to head of free list
-    FwdHeader *tmp = freep;
+    Header *tmp = freep;
     size_t res = tmp->s.size;
 
     // scan free list and count available memory
-    while (tmp->s.nextPtr > tmp) {
-        tmp = tmp->s.nextPtr;
+    while (tmp->s.ptr > tmp) {
+        tmp = tmp->s.ptr;
         res += tmp->s.size;
     }
 
