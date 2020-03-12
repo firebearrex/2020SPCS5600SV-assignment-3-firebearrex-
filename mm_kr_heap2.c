@@ -26,7 +26,13 @@ typedef union Header {
 
 // find the next free block from current Header
 inline static Header *nextFree(Header *h) {
-    return h->s.ptr;
+//    Header *n;
+//    n = h->s.ptr;
+    return h->s.ptr /*n*/;
+}
+
+inline static Header *Footer(Header *h) {
+    return /*(Header*)*/h+h->s.size-1;
 }
 
 // find the previous free block from current Header
@@ -35,14 +41,14 @@ inline static Header *prevFree(Header *h) {
 }
 
 // get Footer position of the current Header
-inline static Header *Footer(Header *h) {
-    return h+h->s.size-1;
-}
+//inline static Header *Footer(Header *h) {
+//    return h+h->s.size-1;
+//}
 
 // get Header position of the current Footer
 //inline static Header *Header(Footer *f) {
-inline static Header *Header(Header *f) {
-    return f-f->s.size+1;
+inline static Header *getHeader(Header *f) {
+    return /*(Header*)*/f-f->s.size+1;
 }
 
 // equalizing the size in Footer
@@ -67,7 +73,12 @@ inline static Header *lowerFooter(Header *h) {
 
 // find the lower block Header from current Header position
 inline static Header *lowerHeader(Header *h) {
-    return Header(lowerFooter(h));
+    return getHeader(lowerFooter(h));
+}
+
+// make the op1 pointer equal to the op2 pointer
+inline static void pointerEqualizer(Header *h1, Header *h2) {
+    h1 = h2;
 }
 
 // forward declarations
@@ -172,6 +183,7 @@ void *mm_malloc(size_t nbytes) {
     }
 
     Header *prevp = freep;
+//    Header *temp;
 
     // smallest count of Header-sized memory chunks
     //  (+2 additional chunk for the Header and Footer) needed to hold nbytes
@@ -184,23 +196,27 @@ void *mm_malloc(size_t nbytes) {
                 // free block exact size
                 prevp->s.ptr = p->s.ptr;
 //                Footer(p->s.ptr)->s.ptr = Footer(p)->s.ptr;
-                prevFree(nextFree(p)) = prevFree(p);
+                pointerEqualizer(prevFree(nextFree(p)), prevFree(p));
+//                prevFree(nextFree(p)) = prevFree(p);
             } else {
                 // split and allocate tail end
                 Header *f = prevFree(p) /*Footer(p)->s.ptr*/; /* store the original Footer pointer */
                 p->s.size -= nunits; // adjust the size (of the current free block after malloc operation) to (before)
                                         // split the block (in the next step)
-                prevFree(p) /*Footer(p)->s.ptr*/ = f; /* make the Footer of the remaining free block point to wherever the original
-                                         pointer pointed to */
+                pointerEqualizer(prevFree(p), f);
+//                prevFree(p) /*Footer(p)->s.ptr*/ = f; /* make the Footer of the remaining free block point to wherever the original
+//                                         pointer pointed to */
                 equalFooter(p); /* update the size in Footer of the remaining free block */
                 /* find the address to return (by moving the *p pointer) */
                 p += p->s.size;		 // address upper block to return
                 p->s.size = nunits;	 // set size of block
                 equalFooter(p); /* update the size in Footer of the allocated block */
             }
-            nextFree(p) /*p->s.ptr*/ = NULL;  // no longer on free list
+            pointerEqualizer(nextFree(p), NULL);
+//            nextFree(p) /*p->s.ptr*/ = NULL;  // no longer on free list
 
-            prevFree(p) /*Footer(p)->s.ptr*/ = NULL; /* Footer pointer set to NULL */
+            pointerEqualizer(prevFree(p), NULL);
+//            prevFree(p) /*Footer(p)->s.ptr*/ = NULL; /* Footer pointer set to NULL */
 
             freep = prevp;  /* move the head */
             return mm_payload(p);
@@ -307,35 +323,46 @@ void mm_free(void *ap) {
 
 // coalesce if both upper block and lower block are in the free list
     if ((nextFree(upperHeader(bp)) != NULL) && (nextFree(lowerHeader(bp)) != NULL)) {
-        nextFree(lowerHeader(bp)) = nextFree(upperHeader(bp)); /* let the lower block Header points to wherever the
- *                                                                upper block Header points to */
-        prevFree(upperHeader(bp)) = prevFree(lowerHeader(bp)); /* let the upper block Footer points to wherever the
- *                                                                lower block Footer points to */
-        prevFree(nextFree(upperHeader(bp))) = lowerHeader(bp); /* let the Footer of next free block after the
- *                                                                upper block points to the Header of the lower
- *                                                                block */
-        bp->s.siza += upperHeader(bp)->s.size; /* update the size after coalescing */
+        pointerEqualizer(nextFree(lowerHeader(bp)), nextFree(upperHeader(bp)));
+//        nextFree(lowerHeader(bp)) = nextFree(upperHeader(bp)); /* let the lower block Header points to wherever the
+// *                                                                upper block Header points to */
+        pointerEqualizer(prevFree(upperHeader(bp)), prevFree(lowerHeader(bp)));
+//        prevFree(upperHeader(bp)) = prevFree(lowerHeader(bp)); /* let the upper block Footer points to wherever the
+// *                                                                lower block Footer points to */
+        pointerEqualizer(prevFree(nextFree(upperHeader(bp))), lowerHeader(bp));
+//        prevFree(nextFree(upperHeader(bp))) = lowerHeader(bp); /* let the Footer of next free block after the
+// *                                                                upper block points to the Header of the lower
+// *                                                                block */
+        bp->s.size += upperHeader(bp)->s.size; /* update the size after coalescing */
         lowerHeader(bp)->s.size += bp->s.size;
         equalFooter(lowerHeader(bp)); /* equalize the new Footer size */
     } else if ((nextFree(upperHeader(bp)) != NULL) && (nextFree(lowerHeader(bp)) == NULL) ) {
-        nextFree(bp) = nextFree(upperHeader(bp)); /* let the Header of bp points to wherever the Header of the upper
- *                                                   block points to */
-        prevFree(nextFree(upperHeader(bp))) = bp; /* let the Footer of the next free block after the upper block points
- *                                                   to bp */
-        nextFree(prevFree(upperHeader(bp))) = bp; /* let the Header of the previous free block points to bp */
+        pointerEqualizer(nextFree(bp), nextFree(upperHeader(bp)));
+//        nextFree(bp) = nextFree(upperHeader(bp)); /* let the Header of bp points to wherever the Header of the upper
+// *                                                   block points to */
+        pointerEqualizer(prevFree(nextFree(upperHeader(bp))), bp);
+//        prevFree(nextFree(upperHeader(bp))) = bp; /* let the Footer of the next free block after the upper block points
+// *                                                   to bp */
+        pointerEqualizer(nextFree(prevFree(upperHeader(bp))), bp);
+//        nextFree(prevFree(upperHeader(bp))) = bp; /* let the Header of the previous free block points to bp */
         bp->s.size += upperHeader(bp)->s.size; /* update the size after coalescing */
         equalFooter(bp); /* equalize the new Footer size */
     } else if ((nextFree(upperHeader(bp)) == NULL) && (nextFree(lowerHeader(bp)) != NULL) ) {
-        prevFree(bp) = prevFree(lowerHeader(bp)); /* let the Footer of bp points to wherever the Footer of the lower
- *                                                   block points to */
+        pointerEqualizer(prevFree(bp), prevFree(lowerHeader(bp)));
+//        prevFree(bp) = prevFree(lowerHeader(bp)); /* let the Footer of bp points to wherever the Footer of the lower
+// *                                                   block points to */
         lowerHeader(bp)->s.size += bp->s.size; /* update the size after coalescing */
         equalFooter(lowerHeader(bp)); /* equalize the new Footer size */
     } else {
         Header *h = nextFree(freep);
-        nextFree(freep) = bp;
-        nextFree(bp) = h;
-        prevFree(h) = bp;
-        prevFree(bp) = freep;
+        pointerEqualizer(nextFree(freep), bp);
+//        nextFree(freep) = bp;
+        pointerEqualizer(nextFree(bp), h);
+//        nextFree(bp) = h;
+        pointerEqualizer(prevFree(h), bp);
+//        prevFree(h) = bp;
+        pointerEqualizer(prevFree(bp), freep);
+//        prevFree(bp) = freep;
     }
 }
 
@@ -378,7 +405,7 @@ void* mm_realloc(void *ap, size_t newsize) {
         return NULL;
     }
     // copy old block to new block
-    size_t oldsize = mm_bytes(bp->s.size-1);
+    size_t oldsize = mm_bytes(bp->s.size-2);
     memcpy(newap, ap, (oldsize < newsize) ? oldsize : newsize);
     mm_free(ap);
     return newap;
@@ -448,7 +475,7 @@ void visualize(const char* msg) {
     }  while (tmp->s.ptr > freep);
 */
     char* str = "    ";
-    for (Header *p = base.s.ptr; p != &base; p = p->s.ptr) {
+    for (Header *p = baseH.s.ptr; p != &baseH; p = p->s.ptr) {
         fprintf(stderr, "%sptr: %10p size: %3lu blks - %5lu bytes\n",
                 str, (void *)p, p->s.size, mm_bytes(p->s.size));
         str = " -> ";
