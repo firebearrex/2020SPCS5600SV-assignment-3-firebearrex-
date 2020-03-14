@@ -89,7 +89,7 @@ void mm_deinit(void) {
 inline static size_t mm_units(size_t nbytes) {
     /* smallest count of Header-sized memory chunks */
     /*  (+2 additional chunk for the Header and Footer) needed to hold nbytes */
-    return (nbytes + sizeof(Header) - 1) / sizeof(Header);
+    return (nbytes + sizeof(Header) - 1) / sizeof(Header) + 2;
 }
 
 /**
@@ -123,12 +123,9 @@ inline static Header *mm_block(void *ap) {
 
 static void printFreeList(Header *p) {
     Header *current = p;
-    Header *currentFp;
 
     do {
-        currentFp = Footer(current);
-        printf("(%x, %x, %d || %x, %x, %d)---->", current, current->s.ptr, current->s.size,
-                currentFp, currentFp->s.ptr, currentFp->s.size);
+        printf("(%x, %d, %x)---->", current, current->s.size, current->s.ptr);
         current = current->s.ptr;
     } while (current != p);
     printf("\n");
@@ -152,41 +149,35 @@ void *mm_malloc(size_t nbytes) {
     Header *fp;
     Header *newFp;
 
-    // smallest count of Header-sized memory chunks needed to hold nbytes
-    // +2 additional chunk for the Header and Footer will be added by morecore()
+    // smallest count of Header-sized memory chunks
+    //  (+2 additional chunk for the Header and Footer) needed to hold nbytes
     size_t nunits = mm_units(nbytes);
     //printf("Size of Header: %d\n", sizeof(Header));
-    //printf("\nMalloc: %d units\n", nunits);
-    //printFreeList(freep);
+    printf("\nMalloc: %d units\n", nunits);
+    printFreeList(freep);
 
     // traverse the circular list to find a block
     for (Header *p = prevp->s.ptr; true ; prevp = p, p = p->s.ptr) {
-        //printf("p: %x, size: %d, ptr: %x\n", p, p->s.size, p->s.ptr);
         if (p->s.size >= nunits) {          /* found block large enough */
             fp = Footer(p);
             prevFp = Footer(prevp);
             nextFp = Footer(p->s.ptr);
 
-            //printf("PrevP: %x, P: %x\n", prevp, p);
-            //printf("PrevFP: %x, FP: %x, nextFP: %x\n", prevFp, fp, nextFp);
-
             if (p->s.size == nunits) {
                 // free block exact size
-                //printf("block size same as nunits at block: %x\n", p);
-                //printf("Setting Prevp->s.ptr: %x To p->s.ptr: %x\n", prevp->s.ptr, p->s.ptr);
+                printf("block size same as nunits at block: %x\n", p);
+
                 prevp->s.ptr = p->s.ptr;
-                //printf("Setting nextFp->s.ptr: %x To prevFp: %x\n", nextFp->s.ptr, prevFp);
                 nextFp->s.ptr = prevFp;
 
                 //printf("End: block size same as nunits\n");
             } else {
-                //printf("block size greater than nunits\n");
+                printf("block size greater than nunits\n");
 
                 // split and allocate tail end
                 // adjust the size to split the block
                 // adjust additional header and footer created
                 // after splitting the block
-                //printFreeList(prevp);
                 p->s.size -= (nunits + 2);
 
                 newFp = Footer(p);
@@ -195,28 +186,26 @@ void *mm_malloc(size_t nbytes) {
                 nextFp->s.ptr = newFp;
 
                 /* find the address to return */
-                p += (p->s.size + 2);		 // address upper block to return
+                p += p->s.size + 2;		 // address upper block to return
                 p->s.size = nunits;	 // set size of block
                 fp->s.size = p->s.size;
-                //printFreeList(prevp);
                 //printf("End: block size greater than nunits\n");
             }
-            //printf("Resetting next pointers\n");
+            printf("Resetting next pointers\n");
             p->s.ptr = NULL;  // no longer on free list
             fp->s.ptr = NULL;
             //printf("End: Resetting next pointers\n");
-            //printFreeList(prevp);
 
             freep = prevp;  /* move the head */
-            //printf("Returning payload from block: %x\n", p);
-            //printFreeList(freep);
+            printf("Returning payload from block: %x\n", p);
+            printFreeList(freep);
             return mm_payload(p);
         }
 
         /* back where we started and nothing found - we need to allocate */
         if (p == freep) {                    /* wrapped around free list */
-            //printf("Need more memory\n");
-            p = morecore(nunits + 2);
+            printf("Need more memory\n");
+            p = morecore(nunits);
             if (p == NULL) {
                 errno = ENOMEM;
                 return NULL;                /* none left */
@@ -244,80 +233,65 @@ void mm_free(void *ap) {
     Header *bp = mm_block(ap);   /* point to block header */
     Header *fp = Footer(bp);   /* point to block header */
 
-    //printf("\nFree: (%x, %d, %x, %d)\n", bp, bp->s.size, fp, fp->s.size);
-    //printFreeList(freep);
+    printf("\nFree: (%x, %d, %x)\n", bp, bp->s.size, fp);
+    printFreeList(freep);
 
     // validate size field of header block
     assert(bp->s.size > 0 && mm_bytes(bp->s.size) <= mem_heapsize());
 
     Header *p = freep;
     Header *rp = Footer(freep);
-    Header *prevFp;
-
-    //printf("FreeP: %x   And   RP: %x\n", freep, rp);
 
     for( ; ; p = p->s.ptr, rp = rp->s.ptr) {
         if (p >= p->s.ptr && (bp > p || bp < p->s.ptr)) {
             // freed block at start or end of arena and p points to
             // header of last block in list
-            //printf("P: Insert freed block at start or end of arena\n");
-            //printf("P: %x, P->next: %x, P->size: %d   AND BP: %x   AND RP: %x\n",
-            //        p, p->s.ptr, p->s.size, bp, rp);
+            printf("P: Insert freed block at start or end of arena\n");
             //printFreeList(p);
             rp = Footer(p->s.ptr);
-            //printf("New RP: %x\n", rp);
             break;
         }
 
         if (rp <= rp->s.ptr && (fp < rp || fp > rp->s.ptr)) {
             // freed block at start or end of arena and rp points to
             // footer of first block in list
-            //printf("RP: Insert freed block at start or end of arena\n");
-            //printf("RP: %x, RP->next: %x, RP->size: %d   AND FP: %x   AND P: %x\n",
-            //       rp, rp->s.ptr, rp->s.size, fp, p);
+            printf("RP: Insert freed block at start or end of arena\n");
             //printFreeList(p);
             p = getHeader(rp->s.ptr);
-            //printf("New P: %x\n", p);
             break;
         }
 
         if (bp > p && bp < p->s.ptr) {
             // found previous block to freed block and p points to
             // header of previous block to bp
-            //printf("P: found previous block to freed block\n");
-            //printf("P: %x AND BP: %x P->next: %x, P->size: %d AND RP: %x\n",
-            //       p, bp, p->s.ptr, p->s.size, rp);
+            printf("P: found previous block to freed block\n");
             //printFreeList(p);
             rp = Footer(p->s.ptr);
-            //printf("New RP: %x\n", rp);
             break;
         }
 
         if (fp < rp && fp > rp->s.ptr) {
             // found next block to freed block and rp points to
             // footer of next block to fp
-            //printf("RP: found previous block to freed block\n");
-            //printf("RP: %x AND FP: %x RP->next: %x, RP->size: %d AND P: %x\n",
-            //       rp, fp, rp->s.ptr, rp->s.size, p);
+            printf("RP: found previous block to freed block\n");
             //printFreeList(p);
             p = getHeader(rp->s.ptr);
-            //printf("New P: %x\n", p);
             break;
         }
     }
 
     if ((bp + bp->s.size + 2) == p->s.ptr) {
         // coalesce if adjacent to upper neighbor
-        //printf("Coalesce if adjacent to upper neighbor\n");
-        bp->s.size += (p->s.ptr->s.size + 2);
+        printf("Coalesce if adjacent to upper neighbor\n");
+        bp->s.size += p->s.ptr->s.size;
         bp->s.ptr = p->s.ptr->s.ptr;
 
-        rp->s.size += (fp->s.size + 2);
+        rp->s.size += fp->s.size;
         fp = rp;
         //printf("End: coalesce if adjacent to upper neighbor\n");
     } else {
         // link in before upper block
-        //printf("Link in before upper block\n");
+        printf("Link in before upper block\n");
         bp->s.ptr = p->s.ptr;
 
         rp->s.ptr = fp;
@@ -326,27 +300,26 @@ void mm_free(void *ap) {
 
     if ((p + p->s.size + 2) == bp) {
         // coalesce if adjacent to lower block
-        //printf("Coalesce if adjacent to lower block\n");
-        p->s.size += (bp->s.size + 2);
+        printf("Coalesce if adjacent to lower block\n");
+        p->s.size += bp->s.size;
         p->s.ptr = bp->s.ptr;
-        prevFp = Footer(p);
 
-        fp->s.size += (prevFp->s.size + 2);
-        fp->s.ptr = prevFp->s.ptr;
+        fp->s.size += rp->s.ptr->s.size;
+        fp->s.ptr = rp->s.ptr->s.ptr;
         //printf("End: coalesce if adjacent to lower block\n");
     } else {
         // link in after lower block
-        //printf("Link in after lower block\n");
+        printf("Link in after lower block\n");
         p->s.ptr = bp;
 
-        fp->s.ptr = rp->s.ptr;
+        fp->s.ptr = rp;
         //printf("End: link in after lower block\n");
     }
 
     /* reset the start of the free list */
     freep = p;
-    //printFreeList(p);
-    //printf("Reset freep to p: %x\n\n", p);
+    printFreeList(p);
+    printf("Reset freep to p: %x\n", p);
 }
 
 /**
@@ -404,7 +377,6 @@ void* mm_realloc(void *ap, size_t newsize) {
 static Header *morecore(size_t nu) {
     // nalloc based on page size
     size_t nalloc = mem_pagesize()/sizeof(Header);
-    //printf("nalloc: %d\n", nalloc);
 
     /* get at least NALLOC Header-chunks from the OS */
     if (nu < nalloc) {
@@ -417,11 +389,9 @@ static Header *morecore(size_t nu) {
         return NULL;
     }
 
-    //printf("Allocated New Block P: %x", p);
-
     Header* bp = (Header*)p;
-    bp->s.size = nu-2;
     Header* fp = Footer(bp);
+    bp->s.size = nu;
     fp->s.size = bp->s.size;
     bp->s.ptr = NULL;
     fp->s.ptr = NULL;
